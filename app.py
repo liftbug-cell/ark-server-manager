@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ConoHa VPS管理システム
-ステータスコード完全対応版
+202ステータスコード問題修正版
 """
 
 import streamlit as st
@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("🦖 ARK Server Manager")
-st.markdown("ConoHa VPS管理システム（完全版）")
+st.markdown("ConoHa VPS管理システム（202修正版）")
 
 # 設定値取得
 try:
@@ -137,7 +137,7 @@ def get_server_status():
         return None
 
 def start_vps():
-    """VPS起動（改善版）"""
+    """VPS起動（202修正版）"""
     if st.session_state.processing:
         return False
     
@@ -159,31 +159,29 @@ def start_vps():
             json={"os-start": None}
         )
         
+        status_code = response.status_code
+        
         # デバッグ情報を保存
         st.session_state.last_response = {
             "action": "起動",
-            "status_code": response.status_code,
+            "status_code": status_code,
             "time": datetime.now().strftime("%H:%M:%S")
         }
         
-        # より寛容な成功判定
-        # 2xx系は全て成功、409も成功（すでに起動中）
-        if 200 <= response.status_code < 300 or response.status_code == 409:
-            if response.status_code == 409:
+        # 明確に成功コードを列挙
+        success_codes = [200, 201, 202, 204, 409]
+        
+        if status_code in success_codes:
+            if status_code == 409:
                 st.info("ℹ️ すでに起動中または起動処理中です")
+            elif status_code == 202:
+                # 202は非同期処理受付の成功
+                st.success("✅ 起動コマンドが受け付けられました (202)")
             return True
-        
-        # エラーレスポンスの内容を確認
-        try:
-            error_data = response.json()
-            # エラーメッセージに特定の文言が含まれる場合は成功とみなす
-            error_msg = str(error_data).lower()
-            if "already" in error_msg or "conflict" in error_msg or "running" in error_msg:
-                return True
-        except:
-            pass
-        
-        return False
+        else:
+            # 失敗の場合はステータスコードを表示
+            st.error(f"予期しないステータスコード: {status_code}")
+            return False
         
     except Exception as e:
         st.session_state.last_response = {
@@ -196,7 +194,7 @@ def start_vps():
         st.session_state.processing = False
 
 def stop_vps():
-    """VPS停止（改善版）"""
+    """VPS停止（202修正版）"""
     if st.session_state.processing:
         return False
     
@@ -218,35 +216,31 @@ def stop_vps():
             json={"os-stop": None}
         )
         
+        status_code = response.status_code
+        
         # デバッグ情報を保存
         st.session_state.last_response = {
             "action": "停止",
-            "status_code": response.status_code,
+            "status_code": status_code,
             "time": datetime.now().strftime("%H:%M:%S")
         }
         
-        # より寛容な成功判定
-        # 2xx系は全て成功、409も成功（すでに停止中）
-        if 200 <= response.status_code < 300 or response.status_code == 409:
-            if response.status_code == 409:
+        # 明確に成功コードを列挙
+        success_codes = [200, 201, 202, 204, 409]
+        
+        if status_code in success_codes:
+            if status_code == 409:
                 st.info("ℹ️ すでに停止中または停止処理中です")
+            elif status_code == 202:
+                st.success("✅ 停止コマンドが受け付けられました (202)")
             return True
-        
-        # エラーレスポンスの内容を確認
-        try:
-            error_data = response.json()
-            error_msg = str(error_data).lower()
-            if "already" in error_msg or "conflict" in error_msg or "shutoff" in error_msg or "stopped" in error_msg:
+        else:
+            # 一部のエラーコードも成功とみなす
+            if status_code in [400, 403, 404]:
+                st.warning(f"⚠️ 特殊なレスポンス({status_code})ですが、処理を続行します")
                 return True
-        except:
-            pass
-        
-        # 特定のステータスコードは警告付きで成功とする
-        if response.status_code in [400, 403, 404]:
-            st.warning(f"⚠️ 予期しないレスポンス(Code: {response.status_code})ですが、コマンドは送信されました")
-            return True
-        
-        return False
+            st.error(f"予期しないステータスコード: {status_code}")
+            return False
         
     except Exception as e:
         st.session_state.last_response = {
@@ -259,7 +253,7 @@ def stop_vps():
         st.session_state.processing = False
 
 def reboot_vps():
-    """VPS再起動（改善版）"""
+    """VPS再起動（202修正版）"""
     if st.session_state.processing:
         return False
     
@@ -281,18 +275,25 @@ def reboot_vps():
             json={"reboot": {"type": "SOFT"}}
         )
         
+        status_code = response.status_code
+        
         # デバッグ情報を保存
         st.session_state.last_response = {
             "action": "再起動",
-            "status_code": response.status_code,
+            "status_code": status_code,
             "time": datetime.now().strftime("%H:%M:%S")
         }
         
-        # 2xx系は全て成功
-        if 200 <= response.status_code < 300:
-            return True
+        # 明確に成功コードを列挙
+        success_codes = [200, 201, 202, 204]
         
-        return False
+        if status_code in success_codes:
+            if status_code == 202:
+                st.success("✅ 再起動コマンドが受け付けられました (202)")
+            return True
+        else:
+            st.error(f"予期しないステータスコード: {status_code}")
+            return False
         
     except Exception as e:
         st.session_state.last_response = {
@@ -332,7 +333,7 @@ def main():
             else:
                 st.error("認証失敗")
         
-        # デバッグモード切り替え
+        # デバッグモード
         st.divider()
         st.session_state.debug_mode = st.checkbox("🔍 デバッグモード", st.session_state.debug_mode)
         
@@ -377,11 +378,6 @@ def main():
             else:
                 st.success("✅ 待機中")
         
-        # デバッグ情報表示
-        if st.session_state.debug_mode:
-            with st.expander("🔍 サーバー詳細情報"):
-                st.json(server)
-        
         st.divider()
         
         # 操作ボタン
@@ -396,10 +392,9 @@ def main():
                         key="start_button"):
                 
                 with st.spinner("起動コマンド送信中..."):
-                    if start_vps():
+                    result = start_vps()
+                    if result:
                         st.success("✅ 起動コマンド送信成功！")
-                        if st.session_state.debug_mode:
-                            st.info(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
                         st.info("📢 3-5分後にARKサーバーに接続可能です")
                         st.balloons()
                         time.sleep(5)
@@ -407,7 +402,7 @@ def main():
                     else:
                         st.error("❌ 起動に失敗しました")
                         if st.session_state.debug_mode:
-                            st.error(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
+                            st.error(f"Status Code: {st.session_state.last_response.get('status_code', 'N/A')}")
         
         with col2:
             if st.button("🔴 停止",
@@ -416,16 +411,15 @@ def main():
                         key="stop_button"):
                 
                 with st.spinner("停止コマンド送信中..."):
-                    if stop_vps():
+                    result = stop_vps()
+                    if result:
                         st.success("✅ 停止コマンド送信成功！")
-                        if st.session_state.debug_mode:
-                            st.info(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
                         time.sleep(5)
                         st.rerun()
                     else:
                         st.error("❌ 停止に失敗しました")
                         if st.session_state.debug_mode:
-                            st.error(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
+                            st.error(f"Status Code: {st.session_state.last_response.get('status_code', 'N/A')}")
         
         with col3:
             if st.button("🔄 再起動",
@@ -434,17 +428,16 @@ def main():
                         key="reboot_button"):
                 
                 with st.spinner("再起動コマンド送信中..."):
-                    if reboot_vps():
+                    result = reboot_vps()
+                    if result:
                         st.success("✅ 再起動コマンド送信成功！")
-                        if st.session_state.debug_mode:
-                            st.info(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
                         st.warning("⏳ 5-7分お待ちください")
                         time.sleep(5)
                         st.rerun()
                     else:
                         st.error("❌ 再起動に失敗しました")
                         if st.session_state.debug_mode:
-                            st.error(f"Debug: Status Code = {st.session_state.last_response.get('status_code', 'N/A')}")
+                            st.error(f"Status Code: {st.session_state.last_response.get('status_code', 'N/A')}")
         
         with col4:
             if st.button("🔄 状態更新", 
@@ -494,17 +487,19 @@ Discord Bot:
             方法1: このページで「🔴 停止」
             方法2: Discordで `!shutdown`
             
-            ### 🔍 デバッグモード
-            サイドバーの「デバッグモード」をONにすると：
-            - APIレスポンスのステータスコード表示
-            - サーバーの詳細情報表示
-            - エラーの詳細確認
+            ### 📊 ステータスコード
+            - **202**: 非同期処理受付成功（正常）
+            - **200**: 同期処理成功
+            - **409**: すでに実行中（正常）
             
-            ### ⚠️ 注意事項
-            - ボタンは1回だけクリック
-            - 処理中は他のボタンが無効
-            - タスク実行中は操作不可
+            ### 🔍 デバッグモード
+            問題が発生した場合は、サイドバーの「デバッグモード」をONにしてステータスコードを確認してください。
             """)
+        
+        # デバッグ情報表示
+        if st.session_state.debug_mode:
+            with st.expander("🔍 サーバー詳細情報"):
+                st.json(server)
     else:
         st.error("サーバー情報を取得できません")
         if st.button("🔄 認証を再試行", disabled=st.session_state.processing):
@@ -513,7 +508,7 @@ Discord Bot:
     
     # フッター
     st.divider()
-    st.caption("🦖 ARK Server Manager - Final Version")
+    st.caption("🦖 ARK Server Manager - 202 Fixed Version")
 
 if __name__ == "__main__":
     main()
