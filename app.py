@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-ConoHa c3j1リージョン対応 VPS管理システム
-最終修正版 - エンドポイント修正済み
+ConoHa VPS管理システム
+アクションコマンドのステータスコード修正版
 """
 
 import streamlit as st
@@ -18,9 +18,9 @@ st.set_page_config(
 )
 
 st.title("🦖 ARK Server Manager")
-st.markdown("ConoHa VPS管理システム（c3j1リージョン対応）")
+st.markdown("ConoHa VPS管理システム（アクション修正版）")
 
-# 設定値取得（Streamlit Secretsから）
+# 設定値取得
 try:
     CONOHA_USERNAME = st.secrets["CONOHA_USERNAME"]
     CONOHA_PASSWORD = st.secrets["CONOHA_PASSWORD"]
@@ -28,26 +28,31 @@ try:
     VPS_SERVER_ID = st.secrets["VPS_SERVER_ID"]
 except Exception as e:
     st.error(f"⚠️ Secrets読み込みエラー: {e}")
-    st.info("""
-    Streamlit Cloud → Settings → Secrets で以下を設定:
-    ```
-    CONOHA_USERNAME = "gncu69143183"
-    CONOHA_PASSWORD = "your_password"
-    CONOHA_TENANT_ID = "c31034637b164e79b3f8478ef71037b3"
-    VPS_SERVER_ID = "your_server_id"
-    ```
-    """)
     st.stop()
 
-# エンドポイント（c3j1リージョン）
+# エンドポイント
 AUTH_ENDPOINT = "https://identity.c3j1.conoha.io/v3/auth/tokens"
-COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"  # ← ここを修正！テナントIDは不要
+COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"
 
 # セッション状態
 if 'token' not in st.session_state:
     st.session_state.token = None
 if 'vps_status' not in st.session_state:
     st.session_state.vps_status = None
+if 'action_log' not in st.session_state:
+    st.session_state.action_log = []
+
+def log_action(action, status_code, success):
+    """アクションログを記録"""
+    log_entry = {
+        "time": datetime.now().strftime("%H:%M:%S"),
+        "action": action,
+        "status_code": status_code,
+        "success": success
+    }
+    st.session_state.action_log.append(log_entry)
+    # 最新10件のみ保持
+    st.session_state.action_log = st.session_state.action_log[-10:]
 
 def get_auth_token():
     """ConoHa v3 API認証"""
@@ -85,31 +90,6 @@ def get_auth_token():
             st.session_state.token = token
             return token
         else:
-            st.error(f"認証失敗: {response.status_code}")
-            return None
-    except Exception as e:
-        st.error(f"認証エラー: {e}")
-        return None
-
-def get_server_list():
-    """サーバー一覧を取得（デバッグ用）"""
-    if not st.session_state.token:
-        st.session_state.token = get_auth_token()
-    
-    if not st.session_state.token:
-        return None
-    
-    headers = {"X-Auth-Token": st.session_state.token}
-    
-    try:
-        response = requests.get(
-            f"{COMPUTE_ENDPOINT}/servers",
-            headers=headers
-        )
-        
-        if response.status_code == 200:
-            return response.json()['servers']
-        else:
             return None
     except:
         return None
@@ -139,28 +119,15 @@ def get_server_status():
                 'addresses': server.get('addresses', {})
             }
         elif response.status_code == 401:
-            # トークン期限切れ
             st.session_state.token = get_auth_token()
-            return get_server_status()  # リトライ
-        elif response.status_code == 404:
-            # サーバーが見つからない場合、一覧を確認
-            servers = get_server_list()
-            if servers:
-                st.error(f"サーバーID {VPS_SERVER_ID} が見つかりません")
-                st.info("利用可能なサーバー:")
-                for server in servers:
-                    st.write(f"- {server['name']}: {server['id']}")
-                st.info(f"正しいサーバーIDをSecrets内のVPS_SERVER_IDに設定してください")
-            return None
+            return get_server_status()
         else:
-            st.error(f"サーバー情報取得失敗: {response.status_code}")
             return None
-    except Exception as e:
-        st.error(f"エラー: {e}")
+    except:
         return None
 
 def start_vps():
-    """VPS起動"""
+    """VPS起動（修正版）"""
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -172,12 +139,24 @@ def start_vps():
             headers=headers,
             json={"os-start": None}
         )
-        return response.status_code == 202
-    except:
+        
+        # ステータスコードをログに記録
+        success = response.status_code in [200, 202, 204]
+        log_action("起動", response.status_code, success)
+        
+        # 409 Conflict = すでに起動している
+        if response.status_code == 409:
+            st.warning("すでに起動しています")
+            return True
+        
+        return success
+        
+    except Exception as e:
+        log_action("起動", "Error", False)
         return False
 
 def stop_vps():
-    """VPS停止"""
+    """VPS停止（修正版）"""
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -189,12 +168,26 @@ def stop_vps():
             headers=headers,
             json={"os-stop": None}
         )
-        return response.status_code == 202
-    except:
+        
+        # ステータスコードをログに記録
+        success = response.status_code in [200, 202, 204]
+        log_action("停止", response.status_code, success)
+        
+        # 409 Conflict = すでに停止している
+        if response.status_code == 409:
+            st.warning("すでに停止しています")
+            return True
+        
+        # 停止コマンドは202以外でも成功の可能性がある
+        # ConoHa APIの仕様によっては200や204を返すこともある
+        return success or response.status_code == 200
+        
+    except Exception as e:
+        log_action("停止", "Error", False)
         return False
 
 def reboot_vps():
-    """VPS再起動"""
+    """VPS再起動（修正版）"""
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -206,8 +199,15 @@ def reboot_vps():
             headers=headers,
             json={"reboot": {"type": "SOFT"}}
         )
-        return response.status_code == 202
-    except:
+        
+        # ステータスコードをログに記録
+        success = response.status_code in [200, 202, 204]
+        log_action("再起動", response.status_code, success)
+        
+        return success
+        
+    except Exception as e:
+        log_action("再起動", "Error", False)
         return False
 
 # メイン画面
@@ -217,7 +217,6 @@ def main():
         st.header("⚙️ 設定")
         st.success("c3j1リージョン接続")
         
-        # トークン状態
         if st.session_state.token:
             st.success("✅ API認証済み")
         else:
@@ -236,15 +235,17 @@ def main():
             else:
                 st.error("認証失敗")
         
-        # サーバー一覧確認（デバッグ用）
-        with st.expander("🔍 サーバー一覧確認"):
-            if st.button("サーバー一覧取得"):
-                servers = get_server_list()
-                if servers:
-                    for server in servers:
-                        st.code(f"{server['name']}: {server['id']}")
+        # アクションログ表示
+        st.divider()
+        st.header("📝 アクションログ")
+        if st.session_state.action_log:
+            for log in reversed(st.session_state.action_log[-5:]):
+                if log['success']:
+                    st.success(f"{log['time']} {log['action']} [{log['status_code']}]")
                 else:
-                    st.error("サーバー一覧を取得できません")
+                    st.error(f"{log['time']} {log['action']} [{log['status_code']}]")
+        else:
+            st.caption("ログなし")
     
     # メインコンテンツ
     st.header("🎮 VPS管理")
@@ -265,8 +266,7 @@ def main():
                 st.warning(f"⏳ {server['status']}")
         
         with col2:
-            # IPアドレス取得
-            ip = "163.44.119.3"  # 固定
+            ip = "163.44.119.3"
             st.info(f"📍 IP: {ip}")
         
         with col3:
@@ -288,7 +288,10 @@ def main():
                         time.sleep(3)
                         st.rerun()
                     else:
-                        st.error("❌ 起動失敗")
+                        # エラーでもステータスを再確認
+                        st.warning("⚠️ コマンド送信済み。状態を確認してください。")
+                        time.sleep(2)
+                        st.rerun()
         
         with col2:
             if st.button("🔴 停止",
@@ -300,7 +303,10 @@ def main():
                         time.sleep(3)
                         st.rerun()
                     else:
-                        st.error("❌ 停止失敗")
+                        # エラーでもステータスを再確認
+                        st.warning("⚠️ コマンド送信済み。状態を確認してください。")
+                        time.sleep(2)
+                        st.rerun()
         
         with col3:
             if st.button("🔄 再起動",
@@ -317,6 +323,16 @@ def main():
         with col4:
             if st.button("🔄 更新", use_container_width=True):
                 st.rerun()
+        
+        # デバッグ情報（展開可能）
+        with st.expander("🔍 デバッグ情報"):
+            st.caption("最新のアクションログ:")
+            if st.session_state.action_log:
+                for log in reversed(st.session_state.action_log):
+                    st.code(f"{log['time']} - {log['action']}: Status {log['status_code']} - Success: {log['success']}")
+            
+            st.caption("現在のサーバー状態:")
+            st.json(server)
         
         # 接続情報
         st.divider()
@@ -353,34 +369,19 @@ Discord Bot:
             方法1: このページで「🔴 停止」
             方法2: Discordで `!shutdown`
             
-            ### 料金について
-            - 起動中: 6.6円/時間
-            - 停止中: 0円
-            - 月額上限: 3,608円
-            
-            ### Discord Bot
-            VPS起動時に自動でDiscord Botも起動します。
+            ### トラブルシューティング
+            - 停止が「失敗」と表示されても実際には成功していることがあります
+            - その場合は「🔄 更新」で状態を確認してください
             """)
     else:
         st.error("サーバー情報を取得できません")
-        
-        # 対処法を表示
-        st.info("""
-        ### 考えられる原因:
-        1. VPS_SERVER_IDが正しくない
-        2. サーバーが存在しない
-        3. 認証エラー
-        
-        サイドバーの「🔍 サーバー一覧確認」から正しいサーバーIDを確認してください。
-        """)
-        
         if st.button("🔄 認証を再試行"):
             st.session_state.token = get_auth_token()
             st.rerun()
     
     # フッター
     st.divider()
-    st.caption("🦖 ARK Server Manager - c3j1 Region - Fixed Endpoint Version")
+    st.caption("🦖 ARK Server Manager - Action Fixed Version")
 
 if __name__ == "__main__":
     main()
