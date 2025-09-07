@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 ConoHa VPS管理システム
-アクションコマンドのステータスコード修正版
+連続実行防止版 - ボタン連打対策済み
 """
 
 import streamlit as st
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 
 # ページ設定
@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("🦖 ARK Server Manager")
-st.markdown("ConoHa VPS管理システム（アクション修正版）")
+st.markdown("ConoHa VPS管理システム（連続実行防止版）")
 
 # 設定値取得
 try:
@@ -34,25 +34,36 @@ except Exception as e:
 AUTH_ENDPOINT = "https://identity.c3j1.conoha.io/v3/auth/tokens"
 COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"
 
-# セッション状態
+# セッション状態の初期化
 if 'token' not in st.session_state:
     st.session_state.token = None
 if 'vps_status' not in st.session_state:
     st.session_state.vps_status = None
-if 'action_log' not in st.session_state:
-    st.session_state.action_log = []
+if 'processing' not in st.session_state:
+    st.session_state.processing = False
+if 'last_action' not in st.session_state:
+    st.session_state.last_action = None
+if 'last_action_time' not in st.session_state:
+    st.session_state.last_action_time = None
+if 'action_cooldown' not in st.session_state:
+    st.session_state.action_cooldown = {}
 
-def log_action(action, status_code, success):
-    """アクションログを記録"""
-    log_entry = {
-        "time": datetime.now().strftime("%H:%M:%S"),
-        "action": action,
-        "status_code": status_code,
-        "success": success
-    }
-    st.session_state.action_log.append(log_entry)
-    # 最新10件のみ保持
-    st.session_state.action_log = st.session_state.action_log[-10:]
+def is_action_allowed(action_type, cooldown_seconds=5):
+    """アクションのクールダウンチェック"""
+    if action_type not in st.session_state.action_cooldown:
+        return True
+    
+    last_time = st.session_state.action_cooldown[action_type]
+    if datetime.now() - last_time > timedelta(seconds=cooldown_seconds):
+        return True
+    
+    remaining = cooldown_seconds - (datetime.now() - last_time).total_seconds()
+    st.warning(f"⏳ {action_type}は{remaining:.1f}秒後に実行可能です")
+    return False
+
+def set_action_cooldown(action_type):
+    """アクションのクールダウンを設定"""
+    st.session_state.action_cooldown[action_type] = datetime.now()
 
 def get_auth_token():
     """ConoHa v3 API認証"""
@@ -116,7 +127,8 @@ def get_server_status():
                 'status': server['status'],
                 'name': server.get('name', 'Unknown'),
                 'created': server.get('created', ''),
-                'addresses': server.get('addresses', {})
+                'addresses': server.get('addresses', {}),
+                'task_state': server.get('OS-EXT-STS:task_state', None)
             }
         elif response.status_code == 401:
             st.session_state.token = get_auth_token()
@@ -127,7 +139,19 @@ def get_server_status():
         return None
 
 def start_vps():
-    """VPS起動（修正版）"""
+    """VPS起動（連続実行防止版）"""
+    # すでに処理中なら実行しない
+    if st.session_state.processing:
+        st.warning("⏳ 処理中です。しばらくお待ちください...")
+        return False
+    
+    # クールダウンチェック
+    if not is_action_allowed("起動", 10):
+        return False
+    
+    st.session_state.processing = True
+    set_action_cooldown("起動")
+    
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -140,23 +164,33 @@ def start_vps():
             json={"os-start": None}
         )
         
-        # ステータスコードをログに記録
-        success = response.status_code in [200, 202, 204]
-        log_action("起動", response.status_code, success)
-        
-        # 409 Conflict = すでに起動している
         if response.status_code == 409:
-            st.warning("すでに起動しています")
+            st.info("ℹ️ すでに起動中または起動処理中です")
             return True
         
-        return success
+        return response.status_code in [200, 202, 204]
         
     except Exception as e:
-        log_action("起動", "Error", False)
+        st.error(f"起動エラー: {e}")
         return False
+    finally:
+        # 処理完了
+        st.session_state.processing = False
 
 def stop_vps():
-    """VPS停止（修正版）"""
+    """VPS停止（連続実行防止版）"""
+    # すでに処理中なら実行しない
+    if st.session_state.processing:
+        st.warning("⏳ 処理中です。しばらくお待ちください...")
+        return False
+    
+    # クールダウンチェック
+    if not is_action_allowed("停止", 10):
+        return False
+    
+    st.session_state.processing = True
+    set_action_cooldown("停止")
+    
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -169,25 +203,34 @@ def stop_vps():
             json={"os-stop": None}
         )
         
-        # ステータスコードをログに記録
-        success = response.status_code in [200, 202, 204]
-        log_action("停止", response.status_code, success)
-        
-        # 409 Conflict = すでに停止している
         if response.status_code == 409:
-            st.warning("すでに停止しています")
+            st.info("ℹ️ すでに停止中または停止処理中です")
             return True
         
-        # 停止コマンドは202以外でも成功の可能性がある
-        # ConoHa APIの仕様によっては200や204を返すこともある
-        return success or response.status_code == 200
+        # 停止は200も成功とみなす
+        return response.status_code in [200, 202, 204]
         
     except Exception as e:
-        log_action("停止", "Error", False)
+        st.error(f"停止エラー: {e}")
         return False
+    finally:
+        # 処理完了
+        st.session_state.processing = False
 
 def reboot_vps():
-    """VPS再起動（修正版）"""
+    """VPS再起動（連続実行防止版）"""
+    # すでに処理中なら実行しない
+    if st.session_state.processing:
+        st.warning("⏳ 処理中です。しばらくお待ちください...")
+        return False
+    
+    # クールダウンチェック
+    if not is_action_allowed("再起動", 10):
+        return False
+    
+    st.session_state.processing = True
+    set_action_cooldown("再起動")
+    
     if not st.session_state.token:
         st.session_state.token = get_auth_token()
     
@@ -200,15 +243,14 @@ def reboot_vps():
             json={"reboot": {"type": "SOFT"}}
         )
         
-        # ステータスコードをログに記録
-        success = response.status_code in [200, 202, 204]
-        log_action("再起動", response.status_code, success)
-        
-        return success
+        return response.status_code in [200, 202, 204]
         
     except Exception as e:
-        log_action("再起動", "Error", False)
+        st.error(f"再起動エラー: {e}")
         return False
+    finally:
+        # 処理完了
+        st.session_state.processing = False
 
 # メイン画面
 def main():
@@ -222,40 +264,43 @@ def main():
         else:
             st.warning("⚠️ 未認証")
         
+        # 処理状態表示
+        if st.session_state.processing:
+            st.warning("⏳ 処理中...")
+        
         st.divider()
         
         st.header("💰 料金")
         st.metric("時間単価", "6.6円/時間")
         st.metric("月額上限", "3,608円")
         
-        if st.button("🔄 認証更新"):
+        if st.button("🔄 認証更新", disabled=st.session_state.processing):
             st.session_state.token = get_auth_token()
             if st.session_state.token:
                 st.success("認証成功！")
             else:
                 st.error("認証失敗")
         
-        # アクションログ表示
-        st.divider()
-        st.header("📝 アクションログ")
-        if st.session_state.action_log:
-            for log in reversed(st.session_state.action_log[-5:]):
-                if log['success']:
-                    st.success(f"{log['time']} {log['action']} [{log['status_code']}]")
-                else:
-                    st.error(f"{log['time']} {log['action']} [{log['status_code']}]")
-        else:
-            st.caption("ログなし")
+        # 最終アクション表示
+        if st.session_state.last_action:
+            st.divider()
+            st.caption(f"最終操作: {st.session_state.last_action}")
+            if st.session_state.last_action_time:
+                st.caption(f"時刻: {st.session_state.last_action_time.strftime('%H:%M:%S')}")
     
     # メインコンテンツ
     st.header("🎮 VPS管理")
+    
+    # 処理中メッセージ
+    if st.session_state.processing:
+        st.info("⏳ コマンド実行中です。しばらくお待ちください...")
     
     # 状態取得
     server = get_server_status()
     
     if server:
         # ステータス表示
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             if server['status'] == 'ACTIVE':
@@ -272,67 +317,89 @@ def main():
         with col3:
             st.metric("サーバー名", server.get('name', 'Unknown'))
         
+        with col4:
+            # タスク状態表示
+            task_state = server.get('task_state')
+            if task_state:
+                st.warning(f"🔄 {task_state}")
+            else:
+                st.success("✅ 待機中")
+        
         st.divider()
         
         # 操作ボタン
         col1, col2, col3, col4 = st.columns(4)
         
+        # 処理中またはタスク実行中は全ボタンを無効化
+        buttons_disabled = st.session_state.processing or (server.get('task_state') is not None)
+        
         with col1:
             if st.button("🟢 起動", 
-                        disabled=(server['status'] == 'ACTIVE'),
-                        use_container_width=True):
-                with st.spinner("起動中..."):
+                        disabled=(server['status'] == 'ACTIVE' or buttons_disabled),
+                        use_container_width=True,
+                        key="start_button"):
+                st.session_state.last_action = "起動"
+                st.session_state.last_action_time = datetime.now()
+                
+                with st.spinner("起動コマンド送信中..."):
                     if start_vps():
                         st.success("✅ 起動コマンド送信成功！")
-                        st.info("3-5分後にARKサーバーに接続可能です")
-                        time.sleep(3)
+                        st.info("📢 3-5分後にARKサーバーに接続可能です")
+                        st.balloons()
+                        # 5秒後に自動更新
+                        time.sleep(5)
                         st.rerun()
                     else:
-                        # エラーでもステータスを再確認
-                        st.warning("⚠️ コマンド送信済み。状態を確認してください。")
-                        time.sleep(2)
-                        st.rerun()
+                        st.error("❌ 起動に失敗しました")
         
         with col2:
             if st.button("🔴 停止",
-                        disabled=(server['status'] == 'SHUTOFF'),
-                        use_container_width=True):
-                with st.spinner("停止中..."):
+                        disabled=(server['status'] == 'SHUTOFF' or buttons_disabled),
+                        use_container_width=True,
+                        key="stop_button"):
+                st.session_state.last_action = "停止"
+                st.session_state.last_action_time = datetime.now()
+                
+                with st.spinner("停止コマンド送信中..."):
                     if stop_vps():
                         st.success("✅ 停止コマンド送信成功！")
-                        time.sleep(3)
+                        # 5秒後に自動更新
+                        time.sleep(5)
                         st.rerun()
                     else:
-                        # エラーでもステータスを再確認
-                        st.warning("⚠️ コマンド送信済み。状態を確認してください。")
-                        time.sleep(2)
-                        st.rerun()
+                        st.error("❌ 停止に失敗しました")
         
         with col3:
             if st.button("🔄 再起動",
-                        disabled=(server['status'] != 'ACTIVE'),
-                        use_container_width=True):
-                with st.spinner("再起動中..."):
+                        disabled=(server['status'] != 'ACTIVE' or buttons_disabled),
+                        use_container_width=True,
+                        key="reboot_button"):
+                st.session_state.last_action = "再起動"
+                st.session_state.last_action_time = datetime.now()
+                
+                with st.spinner("再起動コマンド送信中..."):
                     if reboot_vps():
                         st.success("✅ 再起動コマンド送信成功！")
-                        time.sleep(3)
+                        st.warning("⏳ 5-7分お待ちください")
+                        # 5秒後に自動更新
+                        time.sleep(5)
                         st.rerun()
                     else:
-                        st.error("❌ 再起動失敗")
+                        st.error("❌ 再起動に失敗しました")
         
         with col4:
-            if st.button("🔄 更新", use_container_width=True):
+            if st.button("🔄 状態更新", 
+                        use_container_width=True,
+                        disabled=st.session_state.processing,
+                        key="refresh_button"):
                 st.rerun()
         
-        # デバッグ情報（展開可能）
-        with st.expander("🔍 デバッグ情報"):
-            st.caption("最新のアクションログ:")
-            if st.session_state.action_log:
-                for log in reversed(st.session_state.action_log):
-                    st.code(f"{log['time']} - {log['action']}: Status {log['status_code']} - Success: {log['success']}")
-            
-            st.caption("現在のサーバー状態:")
-            st.json(server)
+        # タスク実行中の警告
+        if server.get('task_state'):
+            st.warning(f"""
+            ⚠️ 現在サーバーは「{server['task_state']}」処理中です。
+            処理が完了するまでお待ちください。
+            """)
         
         # 接続情報
         st.divider()
@@ -360,28 +427,35 @@ Discord Bot:
         # 使い方
         with st.expander("📖 使い方"):
             st.markdown("""
-            ### VPS起動手順
-            1. 「🟢 起動」ボタンをクリック
+            ### 🚀 VPS起動手順
+            1. 「🟢 起動」ボタンをクリック（1回だけ）
             2. 3-5分待つ（VPS起動 + ARK自動起動）
             3. Steamで `163.44.119.3:7777` に接続
             
-            ### VPS停止手順
-            方法1: このページで「🔴 停止」
+            ### 🛑 VPS停止手順
+            方法1: このページで「🔴 停止」（1回だけ）
             方法2: Discordで `!shutdown`
             
-            ### トラブルシューティング
-            - 停止が「失敗」と表示されても実際には成功していることがあります
-            - その場合は「🔄 更新」で状態を確認してください
+            ### ⚠️ 注意事項
+            - **ボタンは1回だけクリック**してください
+            - 連続でクリックすると警告が表示されます
+            - 処理中は他のボタンが無効になります
+            - タスク実行中（powering-on等）は操作できません
+            
+            ### 💡 トラブルシューティング
+            - ボタンが反応しない → 処理完了を待つ
+            - 状態が更新されない → 「🔄 状態更新」をクリック
+            - エラーが続く → 10秒待ってから再試行
             """)
     else:
         st.error("サーバー情報を取得できません")
-        if st.button("🔄 認証を再試行"):
+        if st.button("🔄 認証を再試行", disabled=st.session_state.processing):
             st.session_state.token = get_auth_token()
             st.rerun()
     
     # フッター
     st.divider()
-    st.caption("🦖 ARK Server Manager - Action Fixed Version")
+    st.caption("🦖 ARK Server Manager - Duplicate Prevention Version")
 
 if __name__ == "__main__":
     main()
