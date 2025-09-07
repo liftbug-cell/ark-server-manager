@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ConoHa c3j1リージョン対応 VPS管理システム
-修正版 - Secrets正しく読み込み
+最終修正版 - エンドポイント修正済み
 """
 
 import streamlit as st
@@ -20,40 +20,28 @@ st.set_page_config(
 st.title("🦖 ARK Server Manager")
 st.markdown("ConoHa VPS管理システム（c3j1リージョン対応）")
 
-# ===========================
-# 設定値取得（正しい方法）
-# ===========================
+# 設定値取得（Streamlit Secretsから）
 try:
-    # Streamlit Cloudの正しいSecrets読み込み方法
     CONOHA_USERNAME = st.secrets["CONOHA_USERNAME"]
     CONOHA_PASSWORD = st.secrets["CONOHA_PASSWORD"]
     CONOHA_TENANT_ID = st.secrets["CONOHA_TENANT_ID"]
     VPS_SERVER_ID = st.secrets["VPS_SERVER_ID"]
-    
-    # 読み込み成功を確認
-    CONFIG_LOADED = True
 except Exception as e:
     st.error(f"⚠️ Secrets読み込みエラー: {e}")
-    CONFIG_LOADED = False
-    
-    # エラー時の対処法を表示
     st.info("""
-    ### 設定方法:
-    1. Streamlit Cloud → Settings → Secrets
-    2. 以下を貼り付けて保存:
+    Streamlit Cloud → Settings → Secrets で以下を設定:
     ```
     CONOHA_USERNAME = "gncu69143183"
     CONOHA_PASSWORD = "your_password"
     CONOHA_TENANT_ID = "c31034637b164e79b3f8478ef71037b3"
-    VPS_SERVER_ID = "e299a1cc-ee53-4cce-9659-fd93d3316a74"
+    VPS_SERVER_ID = "your_server_id"
     ```
-    3. アプリを再起動
     """)
     st.stop()
 
 # エンドポイント（c3j1リージョン）
 AUTH_ENDPOINT = "https://identity.c3j1.conoha.io/v3/auth/tokens"
-COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"
+COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"  # ← ここを修正！テナントIDは不要
 
 # セッション状態
 if 'token' not in st.session_state:
@@ -93,22 +81,37 @@ def get_auth_token():
         )
         
         if response.status_code == 201:
-            # v3 APIではヘッダーにトークンが返る
             token = response.headers.get('X-Subject-Token')
             st.session_state.token = token
             return token
         else:
             st.error(f"認証失敗: {response.status_code}")
-            # デバッグ情報
-            with st.expander("デバッグ情報"):
-                st.text(f"Status: {response.status_code}")
-                try:
-                    st.json(response.json())
-                except:
-                    st.text(response.text[:500])
             return None
     except Exception as e:
         st.error(f"認証エラー: {e}")
+        return None
+
+def get_server_list():
+    """サーバー一覧を取得（デバッグ用）"""
+    if not st.session_state.token:
+        st.session_state.token = get_auth_token()
+    
+    if not st.session_state.token:
+        return None
+    
+    headers = {"X-Auth-Token": st.session_state.token}
+    
+    try:
+        response = requests.get(
+            f"{COMPUTE_ENDPOINT}/servers",
+            headers=headers
+        )
+        
+        if response.status_code == 200:
+            return response.json()['servers']
+        else:
+            return None
+    except:
         return None
 
 def get_server_status():
@@ -139,6 +142,16 @@ def get_server_status():
             # トークン期限切れ
             st.session_state.token = get_auth_token()
             return get_server_status()  # リトライ
+        elif response.status_code == 404:
+            # サーバーが見つからない場合、一覧を確認
+            servers = get_server_list()
+            if servers:
+                st.error(f"サーバーID {VPS_SERVER_ID} が見つかりません")
+                st.info("利用可能なサーバー:")
+                for server in servers:
+                    st.write(f"- {server['name']}: {server['id']}")
+                st.info(f"正しいサーバーIDをSecrets内のVPS_SERVER_IDに設定してください")
+            return None
         else:
             st.error(f"サーバー情報取得失敗: {response.status_code}")
             return None
@@ -202,21 +215,11 @@ def main():
     # サイドバー
     with st.sidebar:
         st.header("⚙️ 設定")
-        
-        # 設定の状態表示
-        if CONFIG_LOADED:
-            st.success("✅ 設定読み込み済み")
-        else:
-            st.error("❌ 設定エラー")
-        
-        st.success("🔐 c3j1リージョン接続")
+        st.success("c3j1リージョン接続")
         
         # トークン状態
         if st.session_state.token:
-            st.success("✅ 認証済み")
-            # トークンの最初の20文字を表示（デバッグ用）
-            with st.expander("トークン情報"):
-                st.code(st.session_state.token[:20] + "...")
+            st.success("✅ API認証済み")
         else:
             st.warning("⚠️ 未認証")
         
@@ -233,12 +236,15 @@ def main():
             else:
                 st.error("認証失敗")
         
-        # デバッグ情報
-        with st.expander("🔍 デバッグ情報"):
-            st.caption("設定値（一部マスク）:")
-            st.text(f"User: {CONOHA_USERNAME[:4]}...")
-            st.text(f"Tenant: {CONOHA_TENANT_ID[:8]}...")
-            st.text(f"Server: {VPS_SERVER_ID[:8]}...")
+        # サーバー一覧確認（デバッグ用）
+        with st.expander("🔍 サーバー一覧確認"):
+            if st.button("サーバー一覧取得"):
+                servers = get_server_list()
+                if servers:
+                    for server in servers:
+                        st.code(f"{server['name']}: {server['id']}")
+                else:
+                    st.error("サーバー一覧を取得できません")
     
     # メインコンテンツ
     st.header("🎮 VPS管理")
@@ -358,24 +364,23 @@ Discord Bot:
     else:
         st.error("サーバー情報を取得できません")
         
-        # エラー時の詳細情報
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🔄 認証を再試行", use_container_width=True):
-                st.session_state.token = get_auth_token()
-                st.rerun()
+        # 対処法を表示
+        st.info("""
+        ### 考えられる原因:
+        1. VPS_SERVER_IDが正しくない
+        2. サーバーが存在しない
+        3. 認証エラー
         
-        with col2:
-            if st.button("🔍 詳細情報を表示", use_container_width=True):
-                with st.expander("デバッグ情報", expanded=True):
-                    st.write("Token exists:", st.session_state.token is not None)
-                    if st.session_state.token:
-                        st.write("Token preview:", st.session_state.token[:20] + "...")
-                    st.write("Config loaded:", CONFIG_LOADED)
+        サイドバーの「🔍 サーバー一覧確認」から正しいサーバーIDを確認してください。
+        """)
+        
+        if st.button("🔄 認証を再試行"):
+            st.session_state.token = get_auth_token()
+            st.rerun()
     
     # フッター
     st.divider()
-    st.caption("🦖 ARK Server Manager - c3j1 Region - Fixed Version")
+    st.caption("🦖 ARK Server Manager - c3j1 Region - Fixed Endpoint Version")
 
 if __name__ == "__main__":
     main()
