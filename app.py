@@ -53,7 +53,7 @@ except Exception as e:
 
 # エンドポイント（c3j1リージョン）
 AUTH_ENDPOINT = "https://identity.c3j1.conoha.io/v3/auth/tokens"
-COMPUTE_ENDPOINT = f"https://compute.c3j1.conoha.io/v2.1/{CONOHA_TENANT_ID}"
+COMPUTE_ENDPOINT = "https://compute.c3j1.conoha.io/v2.1"
 
 # セッション状態
 if 'token' not in st.session_state:
