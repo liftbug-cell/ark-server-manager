@@ -137,7 +137,7 @@ def get_server_status():
         return None
 
 def start_vps():
-    """VPS起動（202修正版）"""
+    """VPS起動"""
     if st.session_state.processing:
         return False
     
@@ -194,7 +194,7 @@ def start_vps():
         st.session_state.processing = False
 
 def stop_vps():
-    """VPS停止（202修正版）"""
+    """VPS停止"""
     if st.session_state.processing:
         return False
     
@@ -253,7 +253,7 @@ def stop_vps():
         st.session_state.processing = False
 
 def reboot_vps():
-    """VPS再起動（202修正版）"""
+    """VPS再起動"""
     if st.session_state.processing:
         return False
     
@@ -323,8 +323,8 @@ def main():
         st.divider()
         
         st.header("💰 料金")
-        st.metric("時間単価", "6.6円/時間")
-        st.metric("月額上限", "3,608円")
+        st.metric("時間単価", "14.6円/時間")
+        st.metric("月額上限", "8.083円")
         
         if st.button("🔄 認証更新", disabled=st.session_state.processing):
             st.session_state.token = get_auth_token()
@@ -481,11 +481,10 @@ Discord Bot:
             ### 🚀 VPS起動手順
             1. 「🟢 起動」ボタンをクリック
             2. 3-5分待つ（VPS起動 + ARK自動起動）
-            3. Steamで `163.44.119.3:7777` に接続
+            3. Steamで `163.44.119.3:27015` に接続
             
             ### 🛑 VPS停止手順
             方法1: このページで「🔴 停止」
-            方法2: Discordで `!shutdown`
             
             ### 📊 ステータスコード
             - **202**: 非同期処理受付成功（正常）
