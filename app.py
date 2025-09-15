@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 st.title("🦖 ARK Server Manager")
-st.markdown("ConoHa VPS管理システム（202修正版）")
+st.markdown("ConoHa VPS管理システム")
 
 # 設定値取得
 try:
@@ -322,10 +322,6 @@ def main():
         
         st.divider()
         
-        st.header("💰 料金")
-        st.metric("時間単価", "14.6円/時間")
-        st.metric("月額上限", "8.083円")
-        
         if st.button("🔄 認証更新", disabled=st.session_state.processing):
             st.session_state.token = get_auth_token()
             if st.session_state.token:
@@ -365,7 +361,7 @@ def main():
                 st.warning(f"⏳ {server['status']}")
         
         with col2:
-            ip = "163.44.119.3"
+            ip = "160.251.169.174"
             st.info(f"📍 IP: {ip}")
         
         with col3:
@@ -461,9 +457,9 @@ def main():
         with col1:
             st.code(f"""
 ARKサーバー接続先:
-IP: 163.44.119.3
+IP: 160.251.169.174
 Port: 27015
-接続: 163.44.119.3:27015
+接続: 160.251.169.174:27015
             """)
         
         with col2:
@@ -481,7 +477,7 @@ Discord Bot:
             ### 🚀 VPS起動手順
             1. 「🟢 起動」ボタンをクリック
             2. 3-5分待つ（VPS起動 + ARK自動起動）
-            3. Steamで `163.44.119.3:27015` に接続
+            3. Steamで `160.251.169.174:27015` に接続
             
             ### 🛑 VPS停止手順
             方法1: このページで「🔴 停止」
